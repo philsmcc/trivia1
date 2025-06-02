@@ -1,0 +1,215 @@
+<script type="text/javascript">
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+          return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+            try {
+                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                var firstSheetName = workbook.SheetNames[0];
+                var worksheet = workbook.Sheets[firstSheetName];
+
+                // Convert sheet to JSON to filter blank rows
+                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                // Filter out blank rows (rows where all cells are empty, null, or undefined)
+                var filteredData = jsonData.filter(row => row.some(filledCell));
+
+                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+                var headerRowIndex = filteredData.findIndex((row, index) =>
+                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                );
+                // Fallback
+                if (headerRowIndex === -1 || headerRowIndex > 25) {
+                  headerRowIndex = 0;
+                }
+
+                // Convert filtered JSON back to CSV
+                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                return csv;
+            } catch (e) {
+                console.error(e);
+                return "";
+            }
+        }
+        return gk_fileData[filename] || "";
+        }
+        </script><!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trivia Game</title>
+  <script src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.22.9/Babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/socket.io-client@4.7.5/dist/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const socket = io();
+
+    const questions = [
+      {
+        text: "What is the capital of France?",
+        options: ["Paris", "London", "Berlin", "Madrid"],
+        correct: "Paris"
+      },
+      {
+        text: "Which planet is known as the Red Planet?",
+        options: ["Mars", "Jupiter", "Venus", "Mercury"],
+        correct: "Mars"
+      }
+    ];
+
+    function TVScreen({ gameState, qrCodeUrl }) {
+      const [currentQuestion, setCurrentQuestion] = React.useState(null);
+
+      React.useEffect(() => {
+        socket.on('gameState', (state) => {
+          setCurrentQuestion(state.currentQuestion);
+        });
+        return () => socket.off('gameState');
+      }, []);
+
+      return (
+        <div className="min-h-screen bg-gray-800 text-white flex flex-col items-center justify-center p-8">
+          <h1 className="text-6xl font-bold mb-8">Trivia Game</h1>
+          <div className="flex flex-col md:flex-row w-full max-w-6xl">
+            <div className="flex-1 p-4">
+              <h2 className="text-4xl mb-4">Join the Game</h2>
+              <div id="qrcode" className="bg-white p-4 inline-block"></div>
+              <p className="text-xl mt-4">Scan the QR code to play!</p>
+            </div>
+            <div className="flex-1 p-4">
+              {currentQuestion ? (
+                <div>
+                  <h2 className="text-3xl mb-4">{currentQuestion.text}</h2>
+                  <div className="grid grid-cols-2 gap-4">
+                    {currentQuestion.options.map((option, i) => (
+                      <div key={i} className="bg-gray-700 p-4 rounded text-xl">{option}</div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <h2 className="text-3xl">Waiting for players...</h2>
+              )}
+            </div>
+            <div className="flex-1 p-4">
+              <h2 className="text-3xl mb-4">Leaderboard</h2>
+              <ul className="text-xl">
+                {Object.entries(gameState.scores).map(([name, score]) => (
+                  <li key={name}>{name}: {score}</li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function PlayerScreen() {
+      const [name, setName] = React.useState('');
+      const [joined, setJoined] = React.useState(false);
+      const [currentQuestion, setCurrentQuestion] = React.useState(null);
+
+      React.useEffect(() => {
+        socket.on('gameState', (state) => {
+          setCurrentQuestion(state.currentQuestion);
+        });
+        return () => socket.off('gameState');
+      }, []);
+
+      const joinGame = () => {
+        if (name.trim()) {
+          socket.emit('join', name);
+          setJoined(true);
+        }
+      };
+
+      const submitAnswer = (answer) => {
+        socket.emit('answer', { name, answer });
+      };
+
+      if (!joined) {
+        return (
+          <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+            <div className="bg-white p-8 rounded shadow-md w-full max-w-md">
+              <h1 className="text-2xl font-bold mb-4">Join Trivia Game</h1>
+              <input
+                type="text"
+                className="w-full p-2 border rounded mb-4"
+                placeholder="Enter your name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
+              <button
+                className="w-full bg-blue-500 text-white p-2 rounded"
+                onClick={joinGame}
+              >
+                Join Game
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+          <div className="bg-white p-8 rounded shadow-md w-full max-w-md">
+            {currentQuestion ? (
+              <div>
+                <h2 className="text-xl font-bold mb-4">{currentQuestion.text}</h2>
+                <div className="grid gap-4">
+                  {currentQuestion.options.map((option, i) => (
+                    <button
+                      key={i}
+                      className="w-full bg-blue-500 text-white p-2 rounded"
+                      onClick={() => submitAnswer(option)}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <h2 className="text-xl">Waiting for the next question...</h2>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [gameState, setGameState] = React.useState({ scores: {} });
+      const isPlayer = window.location.pathname === '/player';
+      const qrCodeUrl = window.location.origin + '/player';
+
+      React.useEffect(() => {
+        socket.on('gameState', (state) => {
+          setGameState(state);
+        });
+
+        if (!isPlayer) {
+          const qrcodeDiv = document.getElementById('qrcode');
+          QRCode.toCanvas(qrcodeDiv, qrCodeUrl, { width: 200 }, (err) => {
+            if (err) console.error(err);
+          });
+        }
+
+        return () => socket.off('gameState');
+      }, [isPlayer]);
+
+      return isPlayer ? <PlayerScreen /> : <TVScreen gameState={gameState} qrCodeUrl={qrCodeUrl} />;
+    }
+
+    ReactDOM.render(<App />, document.getElementById('root'));
+  </script>
+</body>
+</html>
